@@ -1,69 +1,42 @@
-import { ref, watch, type Ref } from "vue";
+import type { Ref } from "vue";
 import type { CircuitDocument } from "@/shared/types";
 import type { Notice } from "@/shared/commands";
-import { decodeDocument, encodeDocument } from "../lib/codec";
-import { sampleCircuit, emptyCircuit } from "../lib/seeds";
-export const STORAGE_KEY = "logic-lab-jdk-028-v1";
-export function loadInitial(): {
-  document: CircuitDocument;
-  warning: string | null;
-} {
-  try {
-    const text = localStorage.getItem(STORAGE_KEY);
-    return {
-      document: text ? decodeDocument(text) : sampleCircuit(),
-      warning: null,
-    };
-  } catch {
-    return {
-      document: sampleCircuit(),
-      warning: "本地存档无法读取，已打开示例；导出当前实验后可重新保存。",
-    };
-  }
-}
+import { emptyCircuit } from "../lib/seeds";
+import type { Collaboration } from "@/features/collaboration";
+
+/**
+ * 工作区操作：新建 / 示例 / 导入 / 导出。
+ * 保存与多标签协同全部委托给 collaboration 层，这里只保留文档替换类操作。
+ */
 export function useWorkspace(
   document: Ref<CircuitDocument>,
   notify: (notice: Notice) => void,
+  collab: Collaboration,
   reset: () => void,
 ) {
-  const status = ref("本地自动保存");
-  function save() {
-    try {
-      localStorage.setItem(STORAGE_KEY, encodeDocument(document.value));
-      status.value = "已保存到此浏览器";
-    } catch {
-      status.value = "保存失败，请导出文件";
-      notify({ tone: "error", message: "浏览器存储不可用，请导出实验文件" });
-    }
-  }
-  watch(document, save, { deep: true });
   function replace(next: CircuitDocument) {
-    document.value = next;
+    collab.rebaseDocumentToHead(next);
     reset();
   }
-  function sample() {
-    replace(sampleCircuit());
-    notify({ tone: "success", message: "已载入异或示例" });
-  }
   function clear() {
+    if (
+      !window.confirm("新建会替换当前工作台，未保存改动仍保留在分支记录中。继续吗？")
+    )
+      return;
     replace(emptyCircuit());
-    notify({ tone: "info", message: "已新建空白实验" });
+    notify({ tone: "info", message: "已新建空白实验，改动记录在当前分支" });
   }
   function importText(text: string) {
-    try {
-      const next = decodeDocument(text);
-      replace(next);
-      notify({ tone: "success", message: "导入成功，实验已恢复" });
-    } catch (error) {
-      notify({
-        tone: "error",
-        message: `导入失败：${error instanceof Error ? error.message : "文件无法读取"}；当前实验已保留`,
-      });
-    }
+    if (collab.importDocumentText(text)) reset();
+  }
+  function importConflict(text: string) {
+    collab.importConflictText(text);
   }
   function exportFile() {
     const url = URL.createObjectURL(
-      new Blob([encodeDocument(document.value)], { type: "application/json" }),
+      new Blob([JSON.stringify(document.value, null, 2)], {
+        type: "application/json",
+      }),
     );
     const a = window.document.createElement("a");
     a.href = url;
@@ -72,5 +45,23 @@ export function useWorkspace(
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     notify({ tone: "success", message: "实验文件已导出" });
   }
-  return { status, save, sample, clear, importText, exportFile };
+  function exportConflictFile() {
+    const text = collab.exportConflict();
+    if (!text) return;
+    const url = URL.createObjectURL(
+      new Blob([text], { type: "application/json" }),
+    );
+    const a = window.document.createElement("a");
+    a.href = url;
+    a.download = `conflict-copy-${Date.now()}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  return {
+    clear,
+    importText,
+    importConflict,
+    exportFile,
+    exportConflictFile,
+  };
 }

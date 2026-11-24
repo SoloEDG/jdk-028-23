@@ -5,6 +5,7 @@ import { CircuitBoard } from "@/features/circuit";
 import { InputRack, SignalMonitor } from "@/features/simulation";
 import { ChallengePanel } from "@/features/challenge";
 import { WorkspaceBar } from "@/features/workspace";
+import { ConflictDialog, RecoveryDialog } from "@/features/collaboration";
 import { useLab } from "./useLab";
 const lab = useLab();
 const { document, notice } = lab;
@@ -12,11 +13,12 @@ const { tool } = lab.placement,
   { selected, pending } = lab.circuit,
   { signals } = lab.simulation;
 const { target, table, passed, inspected, hint } = lab.challenge;
-const { status } = lab.workspace;
+const { collab } = lab;
 const selectedNode = computed(() =>
   document.value.nodes.find((node) => node.id === selected.value),
 );
 function keydown(event: KeyboardEvent) {
+  if (collab.activeSession.value) return;
   if ((event.target as HTMLElement).closest("input,textarea,select")) return;
   if (event.key === "Escape") lab.cancel();
   if (event.key === "Delete" || event.key === "Backspace") {
@@ -28,7 +30,7 @@ onMounted(() => window.addEventListener("keydown", keydown));
 onUnmounted(() => window.removeEventListener("keydown", keydown));
 </script>
 <template>
-  <div class="lab-app">
+  <div class="lab-app" :class="{ 'modal-open': collab.activeSession.value }">
     <header class="masthead">
       <div class="brand">
         <span class="brand-icon">⌘</span>
@@ -38,20 +40,25 @@ onUnmounted(() => window.removeEventListener("keydown", keydown));
         </div>
       </div>
       <div class="instrument-label">
-        <span class="power-light" />组合逻辑模式 <small>BENCH / JDK–028</small>
+        <span class="power-light" />多标签协同模式 <small>BENCH / JDK–028</small>
       </div>
     </header>
     <WorkspaceBar
       :name="document.name"
-      :status="status"
+      :status="collab.status.value"
       @rename="document.name = $event"
-      @sample="lab.workspace.sample"
       @clear="lab.workspace.clear"
-      @save="lab.workspace.save"
+      @save="collab.save"
       @export="lab.workspace.exportFile"
       @import="lab.workspace.importText"
+      @import-conflict="lab.workspace.importConflict"
+      @recover="collab.openRecovery"
       @error="lab.notify({ tone: 'error', message: $event })"
     />
+    <div v-if="collab.remoteAhead.value" class="remote-banner" role="status">
+      远端已有新版本 r{{ collab.remoteHeadRevision.value }}（你的分支基于
+      r{{ collab.baseRevision.value }}）。继续编辑不会被覆盖，点击“保存”进入三方合并。
+    </div>
     <main class="workbench">
       <CatalogPanel
         :tool="tool"
@@ -62,7 +69,7 @@ onUnmounted(() => window.removeEventListener("keydown", keydown));
       />
       <section class="center-workspace">
         <div class="board-toolbar">
-          <span><b>工作台</b><small>单比特 · 即时传播</small></span>
+          <span><b>工作台</b><small>单比特 · 即时传播 · 分支 r{{ collab.baseRevision.value }}</small></span>
           <div>
             <button
               :disabled="!selected"
@@ -143,7 +150,30 @@ onUnmounted(() => window.removeEventListener("keydown", keydown));
           notice.tone === "error" ? "!" : notice.tone === "success" ? "✓" : "●"
         }}
         {{ notice.message }}</span
-      ><small>LOCAL LAB / 纯前端实验</small>
+      ><small>LOCAL LAB / 多标签分支 · 分支 {{ collab.branchId.slice(-6) }}</small>
     </footer>
+
+    <ConflictDialog
+      v-if="collab.activeSession.value && collab.conflictDiff.value && collab.conflictPreview.value"
+      :session="collab.activeSession.value"
+      :diff="collab.conflictDiff.value"
+      :preview="collab.conflictPreview.value"
+      :signals="collab.preview.value"
+      :resolutions="collab.resolutions.value"
+      :rebase-notice="collab.rebaseNotice.value"
+      @resolve="collab.setResolution"
+      @commit="collab.commitMerge"
+      @cancel="collab.cancelConflict"
+      @discard="collab.discardConflict"
+      @export="lab.workspace.exportConflictFile"
+    />
+    <RecoveryDialog
+      v-if="collab.showRecovery.value"
+      :options="collab.recoveryOptions.value"
+      :current-branch-id="collab.branchId"
+      @recover="collab.recover"
+      @discard="collab.discardRecovery"
+      @close="collab.closeRecovery"
+    />
   </div>
 </template>

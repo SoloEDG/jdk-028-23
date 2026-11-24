@@ -1,30 +1,55 @@
 import { ref } from "vue";
 import type { Notice } from "@/shared/commands";
-import type { Point } from "@/shared/types";
+import type { CircuitDocument, Point } from "@/shared/types";
 import { usePlacement } from "@/features/catalog";
 import { useCircuit } from "@/features/circuit";
 import { useSimulation } from "@/features/simulation";
 import { useChallenge } from "@/features/challenge";
-import { loadInitial, useWorkspace } from "@/features/workspace";
+import { useCollaboration } from "@/features/collaboration";
+import { useWorkspace } from "@/features/workspace";
+
 export function useLab() {
-  const initial = loadInitial(),
-    document = ref(initial.document);
+  // 先用占位文档建立引用，真正的初始文档由协作层启动后写入。
+  const document = ref<CircuitDocument>({
+    version: 1,
+    name: "",
+    nodes: [],
+    wires: [],
+    targetId: "xor",
+  });
   const notice = ref<Notice>({
-    tone: initial.warning ? "error" : "info",
-    message: initial.warning ?? "示例已就绪。切换输入，观察信号如何到达输出。",
+    tone: "info",
+    message: "正在恢复本地实验…",
   });
   const notify = (next: Notice) => {
     notice.value = next;
   };
+
+  const collab = useCollaboration(document, notify);
+  const started = collab.start();
+  document.value = started.document;
+  notice.value = {
+    tone: started.warning ? "info" : "info",
+    message:
+      started.warning ??
+      "示例已就绪。切换输入，观察信号如何到达输出；多个标签可并行编辑。",
+  };
+
   const placement = usePlacement();
   const circuit = useCircuit(document, notify);
   const simulation = useSimulation(document),
     challenge = useChallenge(document);
-  const workspace = useWorkspace(document, notify, () => {
-    circuit.resetSelection();
-    challenge.reset();
-    placement.tool.value = null;
-  });
+  const workspace = useWorkspace(
+    document,
+    notify,
+    collab,
+    () => {
+      circuit.resetSelection();
+      challenge.reset();
+      placement.tool.value = null;
+    },
+  );
+
   function place(point: Point) {
     if (!placement.tool.value) return;
     if (document.value.nodes.length >= 120) {
@@ -65,6 +90,7 @@ export function useLab() {
     );
     if (node) node.label = label.trim().slice(0, 40) || node.kind;
   }
+
   return {
     document,
     notice,
@@ -74,6 +100,7 @@ export function useLab() {
     simulation,
     challenge,
     workspace,
+    collab,
     place,
     move,
     cancel,
